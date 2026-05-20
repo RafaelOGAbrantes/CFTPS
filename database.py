@@ -21,7 +21,7 @@ def get_db_connection():
         conn.close()
 
 def init_db():
-    """Inicializa o banco de dados com as tabelas necessárias"""
+    """Inicializa o banco de dados com as tabelas necessárias e aplica migrações"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
@@ -54,6 +54,8 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reservas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT,
+                id_usuario INTEGER,
                 id_espaco INTEGER NOT NULL,
                 data_inicio DATE NOT NULL,
                 data_fim DATE NOT NULL,
@@ -62,9 +64,21 @@ def init_db():
                 participantes INTEGER NOT NULL,
                 status INTEGER DEFAULT 1,
                 data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(id_espaco) REFERENCES espacos(id)
+                FOREIGN KEY(id_espaco) REFERENCES espacos(id),
+                FOREIGN KEY(id_usuario) REFERENCES usuarios(id)
             )
         ''')
+
+        # Migração da tabela reservas (adicionar colunas se não existirem)
+        try:
+            cursor.execute("ALTER TABLE reservas ADD COLUMN nome TEXT")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
+            
+        try:
+            cursor.execute("ALTER TABLE reservas ADD COLUMN id_usuario INTEGER REFERENCES usuarios(id)")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
 
         # Criar índices para performance
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_reserva_data ON reservas(data_inicio, data_fim)')
@@ -82,6 +96,55 @@ def init_db():
         conn.commit()
         print("Banco de dados iniciado com sucesso!")
 
+# ─── USUÁRIOS ───────────────────────────────────────────────────────────────
+
+def get_usuarios():
+    """Retorna todos os usuários cadastrados."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, nome, email, telefone, data_criacao FROM usuarios ORDER BY nome")
+        return [dict(row) for row in cursor.fetchall()]
+
+def criar_usuario(nome, email, senha, telefone=""):
+    """Cria um novo usuário."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO usuarios (nome, email, senha, telefone) VALUES (?, ?, ?, ?)",
+                (nome, email, senha, telefone)
+            )
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return None # Email já existe
+
+def editar_usuario(usuario_id, nome, email, telefone=""):
+    """Edita os dados de um usuário."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE usuarios SET nome=?, email=?, telefone=? WHERE id=?",
+                (nome, email, telefone, usuario_id)
+            )
+            return cursor.rowcount
+        except sqlite3.IntegrityError:
+            return 0 # Conflito de email
+
+def alterar_senha(usuario_id, nova_senha):
+    """Altera a senha de um usuário."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE usuarios SET senha=? WHERE id=?", (nova_senha, usuario_id))
+        return cursor.rowcount
+
+def remover_usuario(usuario_id):
+    """Remove um usuário pelo id."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM usuarios WHERE id=?", (usuario_id,))
+        return cursor.rowcount
+
 # ─── ESPAÇOS ────────────────────────────────────────────────────────────────
 
 def get_espacos():
@@ -97,7 +160,7 @@ def criar_espaco(nome, tipo, capacidade, descricao=""):
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO espacos (nome, tipo, capacidade, descricao) VALUES (?, ?, ?, ?)",
-            (nome, tipo, capacidade, descricao)
+            (nome, tipo.lower(), capacidade, descricao)
         )
         return cursor.lastrowid
 
@@ -107,7 +170,7 @@ def editar_espaco(espaco_id, nome, tipo, capacidade, descricao=""):
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE espacos SET nome=?, tipo=?, capacidade=?, descricao=? WHERE id=?",
-            (nome, tipo, capacidade, descricao, espaco_id)
+            (nome, tipo.lower(), capacidade, descricao, espaco_id)
         )
         return cursor.rowcount
 
@@ -127,16 +190,15 @@ def get_reservas():
         cursor.execute("SELECT * FROM reservas ORDER BY data_inicio")
         return [dict(row) for row in cursor.fetchall()]
 
-def criar_reserva(id_espaco, data_inicio, data_fim, participantes,
-                  hora_inicio=None, hora_fim=None):
+def criar_reserva(id_espaco, data_inicio, data_fim, participantes, nome="", id_usuario=None, hora_inicio=None, hora_fim=None):
     """Cria uma nova reserva e retorna o id gerado."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO reservas
-               (id_espaco, data_inicio, data_fim, hora_inicio, hora_fim, participantes)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (id_espaco, str(data_inicio), str(data_fim), hora_inicio, hora_fim, participantes)
+               (id_espaco, data_inicio, data_fim, hora_inicio, hora_fim, participantes, nome, id_usuario)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (id_espaco, str(data_inicio), str(data_fim), hora_inicio, hora_fim, participantes, nome, id_usuario)
         )
         return cursor.lastrowid
 
